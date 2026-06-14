@@ -5,15 +5,15 @@
  * 功能：
  * 1. TMDB 热门电影/电视剧榜单
  * 2. TMDB 搜索功能
- * 3. MoviePilot 订阅联动（在详情页显示订阅信息）
+ * 3. MoviePilot 订阅联动（在详情页显示订阅选项）
  */
 
 var WidgetMetadata = {
     id: "tmdb-moviepilot",
     title: "TMDB + MoviePilot",
     description: "查询 TMDB 热门电影电视剧，联动 MoviePilot 订阅",
-    version: "1.0.0",
-    author: "CapyPlayer User",
+    version: "1.2.0",
+    author: "anlan-home",
     site: "https://www.themoviedb.org",
     icon: "https://www.themoviedb.org/assets/2/apple-touch-icon-cfba7699efe7a742de25c28e08c4ec25.png",
     globalParams: [
@@ -170,33 +170,6 @@ var WidgetMetadata = {
                     defaultValue: "multi",
                     enumOptions: [
                         { title: "全部", value: "multi" },
-                        { title: "电影", value: "movie" },
-                        { title: "电视剧", value: "tv" }
-                    ]
-                }
-            ]
-        },
-        {
-            id: "mp_subscribe",
-            title: "MP 订阅",
-            type: "media_list",
-            functionName: "moviepilotSubscribe",
-            description: "通过 TMDB ID 快速订阅到 MoviePilot",
-            cacheDuration: 0,
-            params: [
-                {
-                    name: "tmdb_id",
-                    label: "TMDB ID",
-                    type: "string",
-                    required: true,
-                    description: "输入 TMDB ID，如: 12345"
-                },
-                {
-                    name: "media_type",
-                    label: "媒体类型",
-                    type: "enum",
-                    defaultValue: "movie",
-                    enumOptions: [
                         { title: "电影", value: "movie" },
                         { title: "电视剧", value: "tv" }
                     ]
@@ -363,7 +336,6 @@ async function getTrending(params) {
     var mediaType = params.media_type || "movie";
     var timeWindow = params.time_window || "week";
     
-    // TMDB trending API 只返回第一页
     if (page > 1) {
         return [];
     }
@@ -404,65 +376,15 @@ async function searchMedia(params) {
     });
 }
 
-// ==================== MoviePilot 订阅模块 ====================
-
-async function moviepilotSubscribe(params) {
-    var tmdbId = params.tmdb_id || "";
-    var mediaType = params.media_type || "movie";
-    var mpUrl = params.mp_url || "";
-    var mpToken = params.mp_token || "";
-    var language = params.language || "zh-CN";
-    
-    if (!tmdbId) {
-        return [];
-    }
-    
-    // 先从 TMDB 获取媒体信息
-    var tmdbData = await Widget.tmdb.get("/" + mediaType + "/" + tmdbId, {
-        params: {
-            language: language
-        }
-    });
-    
-    if (!tmdbData || !tmdbData.id) {
-        return [];
-    }
-    
-    var title = tmdbData.title || tmdbData.name || "";
-    var releaseDate = tmdbData.release_date || tmdbData.first_air_date || "";
-    var year = releaseDate ? releaseDate.substring(0, 4) : "";
-    
-    // 构建返回的媒体项
-    var item = {
-        id: String(tmdbData.id),
-        title: title,
-        posterUrl: getImageUrl(tmdbData.poster_path, "poster"),
-        backdropUrl: getImageUrl(tmdbData.backdrop_path, "backdrop"),
-        description: tmdbData.overview || "",
-        rating: tmdbData.vote_average || null,
-        year: year,
-        mediaType: mediaType,
-        tmdbId: String(tmdbData.id),
-        link: "tmdb://" + mediaType + "/" + tmdbData.id
-    };
-    
-    // 如果配置了 MoviePilot，显示订阅信息
-    if (mpUrl && mpToken) {
-        item.description = (item.description || "") + 
-            "\n\n【MoviePilot 订阅信息】\n" +
-            "名称: " + title + "\n" +
-            "类型: " + (mediaType === "tv" ? "电视剧" : "电影") + "\n" +
-            "年份: " + year + "\n" +
-            "TMDB ID: " + tmdbId + "\n\n" +
-            "点击进入详情页可查看订阅按钮";
-    }
-    
-    return [item];
-}
-
 // ==================== 详情加载与 MoviePilot 订阅 ====================
 
 async function loadDetail(link) {
+    // 解析订阅操作链接
+    var subscribeMatch = link.match(/^mp-subscribe:\/\/(movie|tv)\/(\d+)\?title=([^&]+)&year=([^&]*)(?:&season=(\d+))?$/);
+    if (subscribeMatch) {
+        return await handleSubscribe(subscribeMatch);
+    }
+    
     // 解析 tmdb://movie/123 或 tmdb://tv/123 格式
     var match = link.match(/^tmdb:\/\/(movie|tv)\/(\d+)$/);
     if (!match) {
@@ -490,62 +412,26 @@ async function loadDetail(link) {
     var mpUrl = Widget.storage.get("mp_url", "");
     var mpToken = Widget.storage.get("mp_token", "");
     
-    // 构建描述信息，包含 MoviePilot 订阅信息
-    var description = data.overview || "";
-    
-    if (mpUrl && mpToken) {
-        // 尝试调用 MoviePilot API 添加订阅
-        var subscribeResult = await callMoviePilotSubscribe(mpUrl, mpToken, mediaType, tmdbId, title, year);
-        
-        description += "\n\n━━━━ MoviePilot 订阅 ━━━━\n";
-        description += "名称: " + title + "\n";
-        description += "类型: " + (mediaType === "tv" ? "电视剧" : "电影") + "\n";
-        description += "年份: " + year + "\n";
-        description += "TMDB ID: " + tmdbId + "\n";
-        
-        if (subscribeResult.success) {
-            description += "\n✅ " + subscribeResult.message;
-        } else {
-            description += "\n❌ " + subscribeResult.message;
-            description += "\n\n手动订阅方法:\n";
-            description += "1. 打开 MoviePilot\n";
-            description += "2. 进入「订阅」页面\n";
-            description += "3. 添加订阅，输入 TMDB ID: " + tmdbId;
-        }
-    } else {
-        description += "\n\n━━━━ MoviePilot 订阅 ━━━━\n";
-        description += "⚠️ 未配置 MoviePilot\n";
-        description += "请在组件设置中配置:\n";
-        description += "- MoviePilot 地址\n";
-        description += "- MoviePilot Token\n\n";
-        description += "订阅信息:\n";
-        description += "名称: " + title + "\n";
-        description += "类型: " + (mediaType === "tv" ? "电视剧" : "电影") + "\n";
-        description += "年份: " + year + "\n";
-        description += "TMDB ID: " + tmdbId;
-    }
-    
-    // 返回详情信息
-    var result = {
+    // 构建基础信息
+    var baseInfo = {
         id: String(data.id),
         title: title,
         posterUrl: getImageUrl(data.poster_path, "poster"),
         backdropUrl: getImageUrl(data.backdrop_path, "backdrop"),
-        description: description,
+        description: data.overview || "",
         rating: data.vote_average || null,
         year: year,
         mediaType: mediaType,
         tmdbId: String(data.id),
         imdbId: imdbId,
-        // TV 剧集信息
         seasonCount: data.number_of_seasons || null,
         episodeCount: data.number_of_episodes || null,
         status: data.status || null
     };
     
-    // 如果是电视剧，获取季信息
+    // 如果是电视剧，添加季信息
     if (mediaType === "tv" && data.seasons) {
-        result.seasons = ensureArray(data.seasons).map(function(season) {
+        baseInfo.seasons = ensureArray(data.seasons).map(function(season) {
             return {
                 id: String(season.season_number),
                 seasonNumber: season.season_number,
@@ -556,12 +442,78 @@ async function loadDetail(link) {
         });
     }
     
-    return result;
+    // 构建 MoviePilot 订阅选项（作为 episodeItems）
+    var episodeItems = [];
+    
+    if (mpUrl && mpToken) {
+        // 添加"订阅到 MoviePilot"选项
+        episodeItems.push({
+            id: "mp_subscribe_all",
+            title: "【订阅到 MoviePilot】",
+            description: "点击添加订阅",
+            link: "mp-subscribe://" + mediaType + "/" + tmdbId + "?title=" + encodeURIComponent(title) + "&year=" + year
+        });
+        
+        // 如果是电视剧，添加各季订阅选项
+        if (mediaType === "tv" && data.seasons) {
+            ensureArray(data.seasons).forEach(function(season) {
+                if (season.season_number > 0) {
+                    episodeItems.push({
+                        id: "mp_subscribe_s" + season.season_number,
+                        title: "订阅 第" + season.season_number + "季",
+                        description: season.name || ("第" + season.season_number + "季"),
+                        link: "mp-subscribe://" + mediaType + "/" + tmdbId + "?title=" + encodeURIComponent(title) + "&year=" + year + "&season=" + season.season_number
+                    });
+                }
+            });
+        }
+    } else {
+        // 未配置 MoviePilot，显示提示
+        episodeItems.push({
+            id: "mp_not_configured",
+            title: "【未配置 MoviePilot】",
+            description: "请在组件设置中配置 MoviePilot 地址和 Token"
+        });
+    }
+    
+    // 返回详情，包含订阅选项
+    baseInfo.episodeItems = episodeItems;
+    
+    return baseInfo;
 }
 
-// ==================== MoviePilot API 调用 ====================
+// 处理订阅操作
+async function handleSubscribe(match) {
+    var mediaType = match[1];
+    var tmdbId = match[2];
+    var title = decodeURIComponent(match[3]);
+    var year = match[4] || "";
+    var season = match[5] || null;
+    
+    var mpUrl = Widget.storage.get("mp_url", "");
+    var mpToken = Widget.storage.get("mp_token", "");
+    
+    // 调用 MoviePilot API 添加订阅
+    var result = await callMoviePilotSubscribe(mpUrl, mpToken, mediaType, tmdbId, title, year, season);
+    
+    // 返回订阅结果页面
+    return {
+        id: "subscribe_result_" + tmdbId,
+        title: result.success ? "订阅成功" : "订阅失败",
+        description: "【" + title + "】\n\n" + result.message + "\n\n点击返回继续浏览",
+        posterUrl: null,
+        episodeItems: [
+            {
+                id: "back",
+                title: "返回",
+                link: "tmdb://" + mediaType + "/" + tmdbId
+            }
+        ]
+    };
+}
 
-async function callMoviePilotSubscribe(mpUrl, mpToken, mediaType, tmdbId, title, year) {
+// 调用 MoviePilot API 订阅
+async function callMoviePilotSubscribe(mpUrl, mpToken, mediaType, tmdbId, title, year, season) {
     var url = mpUrl.replace(/\/$/, "") + "/api/v1/subscribe/";
     
     var body = {
@@ -570,6 +522,10 @@ async function callMoviePilotSubscribe(mpUrl, mpToken, mediaType, tmdbId, title,
         year: year,
         tmdbid: parseInt(tmdbId)
     };
+    
+    if (season) {
+        body.season = parseInt(season);
+    }
     
     console.log("MoviePilot 订阅请求:", JSON.stringify(body));
     
@@ -594,20 +550,21 @@ async function callMoviePilotSubscribe(mpUrl, mpToken, mediaType, tmdbId, title,
                 }
             }
             
-            // 检查响应是否成功
             if (respData && (respData.success === true || respData.id)) {
-                return { success: true, message: "订阅成功！" };
+                return { success: true, message: "已成功添加到 MoviePilot 订阅列表！" };
             } else if (respData && respData.message) {
                 return { success: false, message: respData.message };
             } else {
-                return { success: true, message: "订阅请求已发送" };
+                return { success: true, message: "订阅请求已发送，请到 MoviePilot 确认。" };
             }
         } else {
             var errorMsg = "HTTP " + resp.status;
             if (resp.status === 401) {
-                errorMsg = "认证失败，请检查 Token";
+                errorMsg = "认证失败，请检查 Token 是否正确";
             } else if (resp.status === 404) {
-                errorMsg = "MoviePilot 地址不正确";
+                errorMsg = "MoviePilot 地址不正确，请检查配置";
+            } else if (resp.status === 400) {
+                errorMsg = "请求参数错误，可能已订阅过此内容";
             }
             return { success: false, message: errorMsg };
         }
